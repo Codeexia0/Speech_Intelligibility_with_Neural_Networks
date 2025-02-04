@@ -1,53 +1,17 @@
 import json
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import torchaudio
 from pathlib import Path
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-
-import matplotlib.pyplot as plt
-
-def plot_spectrograms(spin_spectrogram, target_spectrogram, spin_label="Spin", target_label="Target"):
-    """
-    Plot two precomputed spectrograms one above the other.
-
-    Args:
-        spin_spectrogram (torch.Tensor): Precomputed spectrogram for the spin signal (2D tensor).
-        target_spectrogram (torch.Tensor): Precomputed spectrogram for the target signal (2D tensor).
-        spin_label (str): Label for the spin spectrogram.
-        target_label (str): Label for the target spectrogram.
-    """
-    # Ensure the spectrograms are on CPU and converted to numpy for plotting
-    spin_spectrogram = spin_spectrogram.squeeze(0).cpu().numpy()
-    target_spectrogram = target_spectrogram.squeeze(0).cpu().numpy()
-
-    # Plot the spectrograms
-    plt.figure(figsize=(10, 8))
-
-    plt.subplot(2, 1, 1)
-    plt.imshow(spin_spectrogram, aspect='auto', origin='lower', cmap='viridis')
-    plt.colorbar(label="Amplitude")
-    plt.title(f"{spin_label} Spectrogram")
-    plt.xlabel("Time")
-    plt.ylabel("Frequency")
-
-    plt.subplot(2, 1, 2)
-    plt.imshow(target_spectrogram, aspect='auto', origin='lower', cmap='viridis')
-    plt.colorbar(label="Amplitude")
-    plt.title(f"{target_label} Spectrogram")
-    plt.xlabel("Time")
-    plt.ylabel("Frequency")
-
-    plt.tight_layout()
-    plt.show()
+from gammatone.gtgram import gtgram 
 
 class CPC1(Dataset):
     def __init__(self,
                  annotations_file,
                  spin_folder,
                  scenes_folder,
-                 transformation,
                  target_sample_rate,
                  num_samples,
                  device,
@@ -57,7 +21,6 @@ class CPC1(Dataset):
         self.spin_folder = Path(spin_folder)
         self.scenes_folder = Path(scenes_folder)
         self.device = device
-        self.transformation = transformation.to(self.device)
         self.target_sample_rate = target_sample_rate
         self.num_samples = num_samples
         self.max_length = max_length
@@ -70,78 +33,100 @@ class CPC1(Dataset):
         spin_path, target_path = self._get_audio_sample_paths(entry)
         correctness = entry['correctness']
 
+        # Load audio signals
         spin_signal, spin_sr = torchaudio.load(spin_path)
         target_signal, target_sr = torchaudio.load(target_path)
 
         spin_signal = spin_signal.to(self.device)
         target_signal = target_signal.to(self.device)
 
+        # Process the signals
         spin_signal = self._resample_if_necessary(spin_signal, spin_sr)
         target_signal = self._resample_if_necessary(target_signal, target_sr)
-
         spin_signal = self._mix_down_if_necessary(spin_signal)
         target_signal = self._mix_down_if_necessary(target_signal)
 
-        # spin_signal = self._adjust_length_to_target(spin_signal, target_signal)
-        
-        # Remove the first 2 seconds and last 1 second based on CPC1 guidelines
-        spin_signal, target_signal = self._cut_timings(spin_signal, target_signal, self.target_sample_rate)
+        # Compute cochleograms
+        spin_cochleogram = self._compute_cochleogram(spin_signal)
+        target_cochleogram = self._compute_cochleogram(target_signal)
 
-        spin_signal = self.transformation(spin_signal)
-        target_signal = self.transformation(target_signal)
-        
-        plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram", target_label="Target spectrogram")
-        
-        
-        spin_signal = self._normalize_spectrogram(spin_signal)
-        target_signal = self._normalize_spectrogram(target_signal)
-        
-        plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram after normalization", target_label="Target spectrogram after normalization")  
-        
-        # plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram", target_label="Target spectrogram")
-        # spin_signal = self._normalize_log10(spin_signal)
-        # target_signal = self._normalize_log10(target_signal)
-        # plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram after normalization", target_label="Target spectrogram")
-        spin_signal, target_signal = self._pad_to_same_length(spin_signal, target_signal, self.max_length)
-        
-        # plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram after padding", target_label="Target spectrogram after padding")
+        # Normalize
+        spin_cochleogram = self._normalize_spectrogram(spin_cochleogram)
+        target_cochleogram = self._normalize_spectrogram(target_cochleogram)
 
-        mask = self._create_mask(spin_signal, self.max_length)
+        # Pad or truncate
+        spin_cochleogram, target_cochleogram = self._pad_or_truncate_to_length(
+            spin_cochleogram, target_cochleogram, self.max_length
+        )
 
-        spin_signal = torch.cat((spin_signal, target_signal), dim=0)
+        # Create mask
+        mask = self._create_mask(spin_cochleogram, self.max_length)
+
+        # Stack cochleograms
+        cochleogram_combined = torch.stack((spin_cochleogram, target_cochleogram), dim=0)
+
+        # Debugging print to confirm types
+        # print(f"Debugging: cochleogram_combined type = {type(cochleogram_combined)}, shape = {cochleogram_combined.shape}")
+        # print(f"Debugging: correctness type = {type(correctness)}, value = {correctness}")
+
+        # Ensure correctness is a tensor
+        correctness_tensor = torch.tensor(correctness / 100.0, dtype=torch.float32)
+
+        # 🔹 Add an assertion to catch any string values
+        assert isinstance(cochleogram_combined, torch.Tensor), f"cochleogram_combined is {type(cochleogram_combined)}"
+        assert isinstance(mask, torch.Tensor), f"mask is {type(mask)}"
+        assert isinstance(correctness_tensor, torch.Tensor), f"correctness is {type(correctness_tensor)}"
 
         return {
-            "spin": spin_signal,
+            "cochleogram_combined": cochleogram_combined,
             "mask": mask,
-            "correctness": int(correctness) / 100.0
+            "correctness": correctness_tensor
         }
+
+
         
+    def _pad_or_truncate_to_length(self, signal1, signal2, target_length):
+        # Truncate if the signal is longer than target_length.
+        if signal1.shape[-1] > target_length:
+            signal1 = signal1[..., :target_length]
+        if signal2.shape[-1] > target_length:
+            signal2 = signal2[..., :target_length]
         
+        # Pad if the signal is shorter than target_length.
+        if signal1.shape[-1] < target_length:
+            pad1 = target_length - signal1.shape[-1]
+            signal1 = F.pad(signal1, (0, pad1))
+        if signal2.shape[-1] < target_length:
+            pad2 = target_length - signal2.shape[-1]
+            signal2 = F.pad(signal2, (0, pad2))
+        
+        return signal1, signal2
+
+        
+    def _compute_cochleogram(self, signal):
+        """
+        Convert a raw audio signal to a cochleogram using gammatone filtering.
+        """
+        signal = signal.cpu().numpy().squeeze()  # Convert to NumPy array
+        cochleogram = gtgram(signal,
+                             self.target_sample_rate,
+                             window_time=0.025,  # 25ms window
+                             hop_time=0.010,     # 10ms step
+                             channels=64,        # 64 frequency channels
+                             f_min=50)           # Minimum frequency 50 Hz
+        cochleogram = torch.tensor(cochleogram, dtype=torch.float32).to(self.device)
+        return cochleogram
+
     def _normalize_spectrogram(self, spectrogram):
         """
-        Apply log scaling and normalize the spectrogram to have zero mean and unit variance.
+        Normalize the input (spectrogram or cochleogram) by applying log scaling and then 
+        global normalization to have zero mean and unit variance.
         """
-        spectrogram = torch.clamp(spectrogram, min=1e-10)  # Avoid log(0)
+        spectrogram = torch.clamp(spectrogram, min=1e-10)
         log_spectrogram = torch.log10(spectrogram)
-
-        # Global normalization: zero mean, unit variance
         mean = log_spectrogram.mean()
         std = log_spectrogram.std()
         normalized_spectrogram = (log_spectrogram - mean) / std
-
-        return normalized_spectrogram
-            
-    def _normalize_log10(self, spectrogram):
-        """
-        Normalize spectrogram amplitudes to the range [-1, 1] using log10.
-        """
-        spectrogram = torch.clamp(spectrogram, min=1e-10)  # Avoid log(0)
-        log_spectrogram = torch.log10(spectrogram)
-
-        # Normalize to range [-1, 1]
-        min_val = log_spectrogram.min()
-        max_val = log_spectrogram.max()
-        normalized_spectrogram = 2 * (log_spectrogram - min_val) / (max_val - min_val) - 1
         return normalized_spectrogram
 
     def _resample_if_necessary(self, signal, sample_rate):
@@ -157,44 +142,22 @@ class CPC1(Dataset):
 
     def _cut_timings(self, spin_signal, target_signal, sample_rate):
         cut_start = int(2 * sample_rate)  # Remove first 2 seconds
-        cut_end = int(1 * sample_rate)   # Remove last 1 second
-
+        cut_end = int(1 * sample_rate)      # Remove last 1 second
         if spin_signal.shape[1] > cut_start + cut_end:
             spin_signal = spin_signal[:, cut_start:-cut_end]
         if target_signal.shape[1] > cut_start + cut_end:
             target_signal = target_signal[:, cut_start:-cut_end]
-
         return spin_signal, target_signal
 
-    def _pad_to_same_length(self, spin_signal, target_signal, max_length):
-        spin_time_dim = spin_signal.shape[-1]
-        target_time_dim = target_signal.shape[-1]
-
-        max_time_dim = max(spin_time_dim, target_time_dim, max_length)
-
-        spin_padding = (0, max_time_dim - spin_time_dim)
-        target_padding = (0, max_time_dim - target_time_dim)
-
-        spin_signal = F.pad(spin_signal, spin_padding)
-        target_signal = F.pad(target_signal, target_padding)
-
-        return spin_signal, target_signal
-    
-    def _adjust_length_to_target(self, signal, target_signal):
-        
-        target_length = target_signal.shape[1]
-        signal_length = signal.shape[1]
-        
-        if signal_length > target_length:
-            # Cut the signal to match the target length
-            signal = signal[:, :target_length]
-        elif signal_length < target_length:
-            # Pad the signal to match the target length
-            num_missing_samples = target_length - signal_length
-            last_dim_padding = (0, num_missing_samples)
-            signal = torch.nn.functional.pad(signal, last_dim_padding)
-    
-        return signal
+    def _pad_to_same_length(self, signal1, signal2, max_length):
+        time_dim1 = signal1.shape[-1]
+        time_dim2 = signal2.shape[-1]
+        max_time_dim = max(time_dim1, time_dim2, max_length)
+        padding1 = (0, max_time_dim - time_dim1)
+        padding2 = (0, max_time_dim - time_dim2)
+        signal1 = F.pad(signal1, padding1)
+        signal2 = F.pad(signal2, padding2)
+        return signal1, signal2
 
     def _create_mask(self, spectrogram, max_length):
         time_dim = spectrogram.shape[-1]
@@ -208,21 +171,75 @@ class CPC1(Dataset):
         spin_path = self.spin_folder / f"{entry['signal']}.wav"
         target_path = self.scenes_folder / f"{entry['scene']}_target_anechoic.wav"
         return spin_path, target_path
-
-    def find_max_spectrogram_length(self):
+    
+    def compute_raw_max_length(self):
+        """
+        Compute the maximum time dimension (T) for the raw cochleograms (after computing
+        and normalizing, but before applying any padding/truncation).
+        """
         max_length = 0
-        for i in range(len(self)):
-            sample = self[i]
-            spin_signal = sample["spin"]
-
-            # Debug: Print the shape of the spectrogram to trace padding
-            # print(f"Sample {i + 1}: Spin spectrogram shape: {spin_signal.shape}")
-
-            time_dim = spin_signal.shape[-1]
-            if time_dim > max_length:
-                max_length = time_dim
-                # print(f"New max length found: {max_length}")
+        for i in range(len(self.annotations)):
+            entry = self.annotations[i]
+            spin_path, target_path = self._get_audio_sample_paths(entry)
+            
+            # Load audio signals
+            spin_signal, spin_sr = torchaudio.load(spin_path)
+            target_signal, target_sr = torchaudio.load(target_path)
+            
+            spin_signal = spin_signal.to(self.device)
+            target_signal = target_signal.to(self.device)
+            
+            # Resample if needed
+            spin_signal = self._resample_if_necessary(spin_signal, spin_sr)
+            target_signal = self._resample_if_necessary(target_signal, target_sr)
+            
+            # Mix down to mono if necessary
+            spin_signal = self._mix_down_if_necessary(spin_signal)
+            target_signal = self._mix_down_if_necessary(target_signal)
+            
+            # Cut off beginning and end portions
+            spin_signal, target_signal = self._cut_timings(spin_signal, target_signal, self.target_sample_rate)
+            
+            # Compute cochleograms (and normalize, if desired)
+            spin_cochleogram = self._compute_cochleogram(spin_signal)
+            target_cochleogram = self._compute_cochleogram(target_signal)
+            
+            spin_cochleogram = self._normalize_spectrogram(spin_cochleogram)
+            target_cochleogram = self._normalize_spectrogram(target_cochleogram)
+            
+            # Determine the raw time dimensions
+            current_length = max(spin_cochleogram.shape[-1], target_cochleogram.shape[-1])
+            if current_length > max_length:
+                max_length = current_length
+            print(f"Processed sample {i+1}/{len(self.annotations)}, Current Raw Max Length: {max_length}")
         return max_length
+    
+def plot_cochleogram(cochleogram, title="Cochleogram", save_path=None):
+    """
+    Plots the cochleogram using Matplotlib.
+
+    Parameters:
+    - cochleogram: Torch tensor of shape (64, time_steps)
+    - title: Title for the plot
+    - save_path: If provided, saves the figure instead of showing it.
+    """
+    if isinstance(cochleogram, torch.Tensor):
+        cochleogram = cochleogram.cpu().numpy()  # Convert to NumPy array if needed
+
+    plt.figure(figsize=(10, 6))
+    plt.imshow(cochleogram, aspect='auto', origin='lower', cmap='inferno')
+    plt.colorbar(label="Amplitude")
+    plt.xlabel("Time Steps")
+    plt.ylabel("Frequency Channels")
+    plt.title(title)
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+
+
 
 
 if __name__ == "__main__":
@@ -231,30 +248,52 @@ if __name__ == "__main__":
     scenes_folder = "C:/Users/Codeexia/FinalSemester/CPC1 Data/clarity_CPC1_data.test.v1/clarity_CPC1_data/clarity_data/scenes"
     SAMPLE_RATE = 16000
     NUM_SAMPLES = 2421
-    MAX_LENGTH = 169 # 263 or 169
+    # For the temporary dataset, you can pass a dummy max_length (e.g., 0)
+    DUMMY_MAX_LENGTH = 0
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    mel_spectrogram = torchaudio.transforms.MelSpectrogram(
-        sample_rate=SAMPLE_RATE,
-        n_fft=1024,
-        hop_length=512,
-        n_mels=64
+    # Create a temporary dataset for finding the maximum raw length
+    # Create a temporary dataset.
+    temp_dataset = CPC1(
+        annotations_file,
+        spin_folder,
+        scenes_folder,
+        target_sample_rate=SAMPLE_RATE,
+        num_samples=NUM_SAMPLES,
+        device=device,
+        max_length=1  # The value here is irrelevant since we won't call __getitem__ directly.
     )
 
+    # # Compute the maximum raw cochleogram length without padding.
+    # max_coch_length = temp_dataset.compute_raw_max_length()
+    # print("Maximum raw cochleogram length:", max_coch_length)
+
+    # Now reinitialize your dataset with the computed maximum length.
     dataset = CPC1(
         annotations_file,
         spin_folder,
         scenes_folder,
-        mel_spectrogram,
-        SAMPLE_RATE,
-        NUM_SAMPLES,
-        device,
-        MAX_LENGTH
+        target_sample_rate=SAMPLE_RATE,
+        num_samples=NUM_SAMPLES,
+        device=device,
+        max_length=537
     )
 
-    print(f"Dataset contains {len(dataset)} samples.")
-    
+
+    # Verify one sample:
     sample = dataset[1]
-    # max_length = dataset.find_max_spectrogram_length()
-    # print(f"Maximum spectrogram length in dataset: {max_length}")
+    print("Cochleogram shape:", sample["cochleogram_combined"].shape)  # Should be [2, 64, max_coch_length]
+    # Get a sample from the dataset
+
+    # Extract the cochleograms
+    spin_cochleogram = sample["cochleogram_combined"][0]  # First channel = Spin
+    target_cochleogram = sample["cochleogram_combined"][1]  # Second channel = Target
+
+    # Plot the spin cochleogram
+    plot_cochleogram(spin_cochleogram, title="Spin Cochleogram")
+
+    # Plot the target cochleogram
+    plot_cochleogram(target_cochleogram, title="Target Cochleogram")
+
+    
