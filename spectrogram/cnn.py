@@ -43,15 +43,24 @@ class CNNNetwork(nn.Module):
             # nn.Dropout(0.5),  # Dropout for regularization
             nn.Linear(16, 1),
         )
+        
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, input_data):
         x = self.conv1(input_data)
+        print("shape after conv1: ", x.shape)
         x = self.conv2(x)
+        print("shape after conv2: ", x.shape)
         x = self.conv3(x)
+        print("shape after conv3: ", x.shape)   
         x = self.conv4(x)
+        print("shape after conv4: ", x.shape)
         x = self.adaptive_pool(x)
+        print("shape after adaptive_pool: ", x.shape)
         x = self.flatten(x)
+        print("shape after flatten: ", x.shape)
         predictions = self.fc(x)  # No sigmoid; regression outputs raw values
+        predictions = self.sigmoid(predictions)
         return predictions
 
 

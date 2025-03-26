@@ -7,6 +7,7 @@ import wandb
 import numpy as np
 from cnn import CNNNetwork
 from CPC1_data_loader import CPC1
+from ResidualBlock import ResidualCNN
 import random
 import datetime
 import os
@@ -14,7 +15,7 @@ import time
 
 # Hyperparameters
 BATCH_SIZE = 32
-EPOCHS = 300
+EPOCHS = 100
 LEARNING_RATE = 0.001
 
 # Dataset Parameters
@@ -107,13 +108,19 @@ def cross_validate(model_class, dataset, loss_fn, optimiser_class, device, epoch
 
     for fold in range(k):
         print(f"Starting Fold {fold + 1}/{k}")
-
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        fold_model_filename = f"{MODEL_NAME}_fold_{fold + 1}_{timestamp}.pth"
         # Re-initialize wandb for each fold
         wandb.init(
-            project="speech-clarity-prediction",
+            project="speech-clarity-prediction-cochleogram",
             entity="codeexia0",
-            name=f"Fold_{fold + 1}",
-            tags=[f"fold-{fold + 1}"],
+            name=f"{MODEL_NAME}_Fold_{fold + 1}_{timestamp} | {MODEL_NAME}",
+            config={
+                "batch_size": BATCH_SIZE,
+                "epochs": EPOCHS,
+                "learning_rate": LEARNING_RATE,  # Define manually
+                "model_name": MODEL_NAME,
+            }
         )
 
         # Define train and validation indices
@@ -150,8 +157,7 @@ def cross_validate(model_class, dataset, loss_fn, optimiser_class, device, epoch
             print("---------------------------")
 
         # Save model for this fold
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        fold_model_filename = f"cnn_model_fold_{fold + 1}_{timestamp}.pth"
+        
         torch.save(model.state_dict(), fold_model_filename)
         print(f"Model for Fold {fold + 1} saved at {fold_model_filename}")
 
@@ -209,7 +215,7 @@ if __name__ == "__main__":
     )
 
     # Perform multiple cross-validation runs
-    num_runs = 5  # Number of times to repeat k-fold cross-validation
+    num_runs = 1  # Number of times to repeat k-fold cross-validation
     for run in range(num_runs):
         print(f"Starting Cross-Validation Run {run + 1}/{num_runs}")
         wandb.init(
@@ -218,8 +224,21 @@ if __name__ == "__main__":
             name=f"Cross-Validation_Run_{run + 1}",
             tags=[f"run-{run + 1}"],
         )
+        
+        
+        # Choose your model
+
+        # model = HCM(freq_bins=64, rnn_hidden_size=128).to(DEVICE)  # Update if needed
+        # MODEL_NAME = "HCM"  # Change to CNNNetwork or ResidualCNN if needed
+        
+        # model = CNNNetwork().to(DEVICE)
+        MODEL_NAME = "CNNNetwork"
+        # 
+        # model = ResidualCNN()
+        # MODEL_NAME = "ResidualCNN"
         cross_validate(
             CNNNetwork,
+            # model,
             dataset,
             nn.MSELoss(reduction='none'),
             torch.optim.Adam,
@@ -230,4 +249,3 @@ if __name__ == "__main__":
         )
         # Finish run for multiple cross-validation
         wandb.finish()
-

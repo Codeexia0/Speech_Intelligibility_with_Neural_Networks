@@ -7,6 +7,9 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
 import numpy as np
 import csv
+from ResidualBlock import ResidualCNN
+
+
 
 ANNOTATIONS_FILE = "C:/Users/Codeexia/FinalSemester/CPC1 Data/clarity_CPC1_data.test.v1/clarity_CPC1_data/metadata/CPC1.test.json"
 SPIN_FOLDER = "C:/Users/Codeexia/FinalSemester/CPC1 Data/clarity_CPC1_data.test.v1/clarity_CPC1_data/clarity_data/HA_outputs/test"
@@ -32,40 +35,56 @@ def save_results_to_csv(predictions, expected_values, filename="results.csv"):
 
 def evaluate_and_plot(predictions, expected_values):
     """Evaluate the predictions and plot results."""
+
+    # Calculate metrics
     mse = mean_squared_error(expected_values, predictions)
     rmse = np.sqrt(mse)
+    mae = mean_absolute_error(expected_values, predictions)
+
     print(f"Validation MSE: {mse:.4f}")
     print(f"Validation RMSE: {rmse:.4f}")
-    mae = mean_absolute_error(expected_values, predictions)
     print(f"Validation MAE: {mae:.4f}")
 
-    # Plot error distribution
-    plt.hist([pred - exp for pred, exp in zip(predictions, expected_values)], bins=30, alpha=0.7, color='blue')
-    plt.xlabel('Prediction Error')
-    plt.ylabel('Frequency')
-    plt.title('Distribution of Prediction Errors')
-    plt.show()
+    # # 1) Histogram of Prediction Errors
+    # errors = [pred - exp for pred, exp in zip(predictions, expected_values)]
+    # plt.figure(figsize=(8, 4))
+    # plt.hist(errors, bins=30, alpha=0.7, color='blue')
+    # plt.xlabel('Prediction Error (predicted - true)')
+    # plt.ylabel('Frequency')
+    # plt.title('Distribution of Prediction Errors')
+    # plt.show()
 
-    # Plot predicted values distribution
-    plt.hist(predictions, bins=30, alpha=0.7, color='green')
-    plt.xlabel('Predicted Values')
-    plt.ylabel('Frequency')
-    plt.title('Distribution of Predicted Values')
-    plt.show()
+    # # 2) Histogram of Predicted Values
+    # plt.figure(figsize=(8, 4))
+    # plt.hist(predictions, bins=30, alpha=0.7, color='green')
+    # plt.xlabel('Predicted Values')
+    # plt.ylabel('Frequency')
+    # plt.title('Distribution of Predicted Values')
+    # plt.show()
 
-    # Scatter plot for true vs. predicted values
-    plt.figure(figsize=(10, 6))
-    plt.scatter(range(len(predictions)), expected_values, s=5, color="blue", label="Expected")
-    plt.plot(range(len(predictions)), predictions, lw=0.8, color="red", label="Predicted")
-    plt.title("Predictions vs Expected Values")
-    plt.xlabel("Sample Index")
-    plt.ylabel("Correctness")
-    plt.legend()
-    plt.show()
+    # # 3) Scatter plot: True Intelligibility (x) vs. Predicted Intelligibility (y)
+    # plt.figure(figsize=(8, 6))
+    # plt.scatter(expected_values, predictions, s=10, alpha=0.7, color="blue")
+    # # Optional: If your range is 0..100, set axis limits and draw the diagonal:
+    # plt.plot([0,100], [0,100], color='red', linestyle='--', label='Ideal = y=x')
+    # plt.xlim([0, 100])
+    # plt.ylim([0, 100])
+    
+    # plt.xlabel("True Intelligibility")
+    # plt.ylabel("Predicted Intelligibility")
+    # plt.title("Predicted vs. True Intelligibility")
+    # plt.legend()
+    # plt.show()
+    
+    import matplotlib.pyplot as plt
 
+
+
+    
 if __name__ == "__main__":
     model = CNNNetwork()
-    model_filename = "cnn_model_20250118_014714.pth"
+    # model = ResidualCNN()
+    model_filename = "CNNNetwork_fold_5_20250215_172806.pth"
     model.load_state_dict(torch.load(model_filename))
     model.eval()
 
@@ -84,7 +103,7 @@ if __name__ == "__main__":
         SAMPLE_RATE,
         NUM_SAMPLES,
         'cpu',
-        max_length=263
+        max_length=169
     )
 
     predictions = []
@@ -118,5 +137,5 @@ if __name__ == "__main__":
     print(f"Correctness percentage: {correctness_percentage:.2f}%")
     print(f"Average expected correctness: {avg_correctness:.4f}")
 
-    save_results_to_csv(predictions, expected_values, filename="predictions_results.csv")
+    save_results_to_csv(predictions, expected_values, filename=model_filename.replace(".pth", ".csv"))
     evaluate_and_plot(predictions, expected_values)

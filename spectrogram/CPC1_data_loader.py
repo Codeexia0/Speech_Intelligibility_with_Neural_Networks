@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 def plot_spectrograms(spin_spectrogram, target_spectrogram, spin_label="Spin", target_label="Target"):
     """
@@ -28,19 +28,42 @@ def plot_spectrograms(spin_spectrogram, target_spectrogram, spin_label="Spin", t
     plt.subplot(2, 1, 1)
     plt.imshow(spin_spectrogram, aspect='auto', origin='lower', cmap='viridis')
     plt.colorbar(label="Amplitude")
-    plt.title(f"{spin_label} Spectrogram")
+    plt.title(f"{spin_label}")
     plt.xlabel("Time")
-    plt.ylabel("Frequency")
+    plt.ylabel("Mel Bins")
 
     plt.subplot(2, 1, 2)
     plt.imshow(target_spectrogram, aspect='auto', origin='lower', cmap='viridis')
     plt.colorbar(label="Amplitude")
-    plt.title(f"{target_label} Spectrogram")
+    plt.title(f"{target_label}")
     plt.xlabel("Time")
-    plt.ylabel("Frequency")
+    plt.ylabel("Mel Bins")
 
     plt.tight_layout()
     plt.show()
+    
+
+
+def plot_spectrogram(spectrogram, title="Spectrogram", xlabel="Time", ylabel="Frequency"):
+    """
+    Plots a single spectrogram.
+
+    Args:
+        spectrogram (torch.Tensor): Precomputed spectrogram (2D tensor).
+        title (str): Title for the spectrogram plot.
+        xlabel (str): Label for x-axis.
+        ylabel (str): Label for y-axis.
+    """
+    spectrogram = spectrogram.squeeze(0).cpu().numpy()  # Convert to numpy
+
+    plt.figure(figsize=(8, 6))
+    plt.imshow(spectrogram, aspect='auto', origin='lower', cmap='viridis')
+    plt.colorbar(label="Amplitude")
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.show()
+
 
 class CPC1(Dataset):
     def __init__(self,
@@ -86,25 +109,26 @@ class CPC1(Dataset):
         
         # Remove the first 2 seconds and last 1 second based on CPC1 guidelines
         spin_signal, target_signal = self._cut_timings(spin_signal, target_signal, self.target_sample_rate)
+        pl
 
         spin_signal = self.transformation(spin_signal)
         target_signal = self.transformation(target_signal)
         
-        plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram", target_label="Target spectrogram")
+        # plot_spectrograms(spin_signal, target_signal, spin_label="Noisy Signal Spectrogram", target_label="Reference Signal Spectrogram")
         
         
         spin_signal = self._normalize_spectrogram(spin_signal)
         target_signal = self._normalize_spectrogram(target_signal)
         
-        plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram after normalization", target_label="Target spectrogram after normalization")  
+        # plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram after normalization", target_label="Target spectrogram after normalization")  
         
-        # plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram", target_label="Target spectrogram")
+        # plot_spectrograms(spin_signal, target_signal, spin_label="Noisy spectrogram", target_label="Target spectrogram")
         # spin_signal = self._normalize_log10(spin_signal)
         # target_signal = self._normalize_log10(target_signal)
-        # plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram after normalization", target_label="Target spectrogram")
+        # plot_spectrograms(spin_signal, target_signal, spin_label="Noisy Signal Spectrogram after normalization", target_label="Reference Signal Spectrogram after normalization")
         spin_signal, target_signal = self._pad_to_same_length(spin_signal, target_signal, self.max_length)
         
-        # plot_spectrograms(spin_signal, target_signal, spin_label="Spin spectrogram after padding", target_label="Target spectrogram after padding")
+        # plot_spectrograms(spin_signal, target_signal, spin_label="Noisy Signal Spectrogram after padding/truncation", target_label="Reference Signal Spectrogram after padding/truncation")
 
         mask = self._create_mask(spin_signal, self.max_length)
 
@@ -255,6 +279,13 @@ if __name__ == "__main__":
 
     print(f"Dataset contains {len(dataset)} samples.")
     
-    sample = dataset[1]
+    sample = dataset[0]
+    
+    # spin_spectrogram = sample["spin"][:1]  # First channel is spin
+    # target_spectrogram = sample["spin"][1:]  # Second channel is target
+
+    # # Plot separately
+    # plot_spectrogram(spin_spectrogram, title="Spin Spectrogram")
+    # plot_spectrogram(target_spectrogram, title="Target Spectrogram")
     # max_length = dataset.find_max_spectrogram_length()
     # print(f"Maximum spectrogram length in dataset: {max_length}")
